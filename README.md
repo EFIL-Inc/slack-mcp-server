@@ -1,3 +1,9 @@
+# EFIL-Inc dependency-security fork
+
+This fork exists only to update vulnerable Go dependencies used by LatensOS / MCPon.
+Return to the upstream release once it contains equivalent or newer security fixes.
+Upstream: https://github.com/korotovsky/slack-mcp-server
+
 # Slack MCP Server
 [![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/korotovsky/slack-mcp-server)](https://archestra.ai/mcp-catalog/korotovsky__slack-mcp-server)
 
