@@ -198,6 +198,9 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledToo
 			mcp.WithString("blocks",
 				mcp.Description("Raw Slack Block Kit JSON array for rich message formatting (rich_text lists, code blocks, etc.). When provided, this takes precedence over text/content_type for rendering. The text parameter becomes the notification fallback text."),
 			),
+			mcp.WithString("metadata",
+				mcp.Description("Optional Slack message metadata as a JSON object: {\"event_type\": \"my_event\", \"event_payload\": {...}}. Sent as chat.postMessage metadata so that event subscribers can recognise the message. event_type is required when metadata is given."),
+			),
 		), conversationsHandler.ConversationsAddMessageHandler)
 	}
 
