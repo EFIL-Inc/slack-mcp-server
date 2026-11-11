@@ -99,6 +99,7 @@ type addMessageParams struct {
 	text        string
 	contentType string
 	blocks      []slack.Block
+	metadata    *slack.SlackMetadata
 }
 
 type addReactionParams struct {
@@ -219,35 +220,9 @@ func (ch *ConversationsHandler) ConversationsAddMessageHandler(ctx context.Conte
 		return nil, err
 	}
 
-	var options []slack.MsgOption
-	if params.threadTs != "" {
-		options = append(options, slack.MsgOptionTS(params.threadTs))
-	}
-
-	if params.blocks != nil {
-		// Raw blocks provided: use them directly. If text is also provided, it
-		// serves as the notification/fallback text.
-		options = append(options, slack.MsgOptionBlocks(params.blocks...))
-		if params.text != "" {
-			options = append(options, slack.MsgOptionText(params.text, false))
-		}
-	} else {
-		switch params.contentType {
-		case "text/plain":
-			options = append(options, slack.MsgOptionDisableMarkdown())
-			options = append(options, slack.MsgOptionText(params.text, false))
-		case "text/markdown":
-			blocks, err := slackGoUtil.ConvertMarkdownTextToBlocks(params.text)
-			if err != nil {
-				ch.logger.Warn("Markdown parsing error", zap.Error(err))
-				options = append(options, slack.MsgOptionDisableMarkdown())
-				options = append(options, slack.MsgOptionText(params.text, false))
-			} else {
-				options = append(options, slack.MsgOptionBlocks(blocks...))
-			}
-		default:
-			return nil, errors.New("content_type must be either 'text/plain' or 'text/markdown'")
-		}
+	options, err := ch.buildAddMessageOptions(params)
+	if err != nil {
+		return nil, err
 	}
 
 	unfurlOpt := os.Getenv("SLACK_MCP_ADD_MESSAGE_UNFURLING")
@@ -1832,12 +1807,19 @@ func (ch *ConversationsHandler) parseParamsToolAddMessage(ctx context.Context, r
 		return nil, errors.New("either text or blocks must be provided")
 	}
 
+	metadata, err := parseMessageMetadata(args["metadata"])
+	if err != nil {
+		ch.logger.Error("Invalid metadata", zap.Error(err))
+		return nil, err
+	}
+
 	return &addMessageParams{
 		channel:     channel,
 		threadTs:    threadTs,
 		text:        msgText,
 		contentType: contentType,
 		blocks:      blocks,
+		metadata:    metadata,
 	}, nil
 }
 
@@ -2457,4 +2439,95 @@ func hasImageBlocks(blocks slack.Blocks) bool {
 		}
 	}
 	return false
+}
+
+// parseMessageMetadata parses the optional "metadata" argument of
+// conversations_add_message into Slack message metadata (chat.postMessage
+// "metadata"). It accepts either a JSON object or a JSON string holding one:
+//
+//	{"event_type": "my_event", "event_payload": {"key": "value"}}
+//
+// A missing, null or empty-string value means "no metadata". event_type is
+// required when metadata is given; event_payload is optional.
+func parseMessageMetadata(raw any) (*slack.SlackMetadata, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	var metaJSON []byte
+	switch v := raw.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil, nil
+		}
+		metaJSON = []byte(v)
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("metadata must be a JSON object: %w", err)
+		}
+		metaJSON = b
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(metaJSON, &obj); err != nil || obj == nil {
+		return nil, errors.New("metadata must be a JSON object with event_type and optional event_payload")
+	}
+	for key := range obj {
+		if key != "event_type" && key != "event_payload" {
+			return nil, fmt.Errorf("metadata has unknown field %q (allowed: event_type, event_payload)", key)
+		}
+	}
+
+	var meta slack.SlackMetadata
+	if err := json.Unmarshal(metaJSON, &meta); err != nil {
+		return nil, fmt.Errorf("metadata must be a JSON object with event_type and optional event_payload: %w", err)
+	}
+	if strings.TrimSpace(meta.EventType) == "" {
+		return nil, errors.New("metadata.event_type must be a non-empty string")
+	}
+	if meta.EventPayload == nil {
+		meta.EventPayload = map[string]any{}
+	}
+	return &meta, nil
+}
+
+// buildAddMessageOptions turns parsed add-message params into chat.postMessage
+// options (thread, body, metadata). Unfurling options are added by the caller.
+func (ch *ConversationsHandler) buildAddMessageOptions(params *addMessageParams) ([]slack.MsgOption, error) {
+	var options []slack.MsgOption
+	if params.threadTs != "" {
+		options = append(options, slack.MsgOptionTS(params.threadTs))
+	}
+
+	if params.blocks != nil {
+		// Raw blocks provided: use them directly. If text is also provided, it
+		// serves as the notification/fallback text.
+		options = append(options, slack.MsgOptionBlocks(params.blocks...))
+		if params.text != "" {
+			options = append(options, slack.MsgOptionText(params.text, false))
+		}
+	} else {
+		switch params.contentType {
+		case "text/plain":
+			options = append(options, slack.MsgOptionDisableMarkdown())
+			options = append(options, slack.MsgOptionText(params.text, false))
+		case "text/markdown":
+			blocks, err := slackGoUtil.ConvertMarkdownTextToBlocks(params.text)
+			if err != nil {
+				ch.logger.Warn("Markdown parsing error", zap.Error(err))
+				options = append(options, slack.MsgOptionDisableMarkdown())
+				options = append(options, slack.MsgOptionText(params.text, false))
+			} else {
+				options = append(options, slack.MsgOptionBlocks(blocks...))
+			}
+		default:
+			return nil, errors.New("content_type must be either 'text/plain' or 'text/markdown'")
+		}
+	}
+
+	if params.metadata != nil {
+		options = append(options, slack.MsgOptionMetadata(*params.metadata))
+	}
+
+	return options, nil
 }
